@@ -1,0 +1,5 @@
+.ipynb_checkpoints/
+*.png
+exploration_output/
+hyperparameter_four_explore/
+*.fits
