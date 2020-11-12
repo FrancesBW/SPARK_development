@@ -54,7 +54,7 @@ class lbfgs_abs(object):
         
         #first we retain the old fresh initialisation:
         if init==2:
-            params_Tb, params_tau = self.fresh_init(n_gauss, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, iprint_init, amp_fact_init, sig_init, maxiter_init)
+            params_Tb, params_tau, n_gauss_Tb= self.fresh_init(n_gauss, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, iprint_init, amp_fact_init, sig_init, maxiter_init)
          
             #Allocate and init arrays
             cube = np.moveaxis(np.array([self.Tb,self.tau]),0,1)
@@ -74,6 +74,7 @@ class lbfgs_abs(object):
             #Update both with regularization
             prelim_result = optimize.fmin_l_bfgs_b(self.f_g, params.ravel(), args=(n_gauss, cube, rms), bounds=bounds, 
                                                    approx_grad=False, disp=iprint, maxiter=maxiter)
+            params=prelim_result[0]
 
         #now we write the case where we do an iterative solution we will set up it separately for if we need to start from one 
         #or from a predefined solution
@@ -156,36 +157,32 @@ class lbfgs_abs(object):
             print('**********************************************')
             model_cube=self.model(params, cube, n_gauss)
             fit_metrics=self.reduced_chi_squared(cube, model_cube, rms, n_gauss)
-            try:
-                corr_metrics=np.array([pcc(params[1::3,0],params[1::3,1])[0], pcc(params[2::3,0],params[2::3,1])[0]])
-            except ValueError:
-                corr_metrics=np.ones(2)
+            corr_diffs=np.array([np.abs(params[1::3,0]-params[1::3,1]), np.abs(params[2::3,0]-params[2::3,1])])
             good_fit=True
             print('Calculated values are:')
             print(fit_metrics)
-            print(corr_metrics)
-            #normalise the lambda values so that the smallest is equal to 1, preserves ratio whilst not allowing them to get too 
-            #big
-            self.normalise_lambdas()
+            print(corr_diffs)
+            
+            Tb_cor, tau_cor, v_cor, sig_cor = self.normalise_lambdas(fit_metrics*len(cube), params)
             if fit_metrics[0]>metric_limits[0]: 
                 print('emission not fitted enough, current lambda_tb = {}'.format(str(self.lambda_Tb)))
                 print('This is iteration {}'.format(str(i)))
-                self.lambda_Tb+=10/max_cor_iter
+                self.lambda_Tb+=Tb_cor
                 print('ammended lambda_tb = {}'.format(str(self.lambda_Tb)))
                 good_fit=False
             if fit_metrics[1]>metric_limits[1]: 
                 print('absorption not fitted enough, current lambda_tau = {}'.format(str(self.lambda_tau)))
-                self.lambda_tau+=10/max_cor_iter
+                self.lambda_tau+=tau_cor
                 print('ammended lambda_tau = {}'.format(str(self.lambda_tau)))
                 good_fit=False
-            if corr_metrics[0]<metric_limits[2]: 
+            if np.any(corr_diffs[0]>metric_limits[2]): 
                 print('mu dont align enough, current lambda_mu = {}'.format(str(self.lambda_mu)))
-                self.lambda_mu+=10/max_cor_iter
+                self.lambda_mu+=v_cor
                 print('ammended lambda_mu = {}'.format(str(self.lambda_mu)))
                 good_fit=False
-            if corr_metrics[1]<metric_limits[3]: 
+            if np.any(corr_diffs[1]>metric_limits[3]): 
                 print('sig dont align enough, current lambda_sig = {}'.format(str(self.lambda_sig)))
-                self.lambda_sig+=10/max_cor_iter
+                self.lambda_sig+=sig_cor
                 print('ammended lambda_sig = {}'.format(str(self.lambda_sig)))
                 good_fit=False
             if good_fit: 
@@ -204,13 +201,17 @@ class lbfgs_abs(object):
         red_chi_sq_tau=np.sum(chi_sq[:,1]**2)/(len(cube)-3*n_gauss)
         return [red_chi_sq_Tb, red_chi_sq_tau]
             
-    def normalise_lambdas(self):
-        max_lambda=np.nanmin(np.array([self.lambda_Tb, self.lambda_tau, self.lambda_mu, self.lambda_sig]))
-        self.lambda_Tb=self.lambda_Tb/max_lambda
-        self.lambda_tau=self.lambda_tau/max_lambda
-        self.lambda_mu=self.lambda_mu/max_lambda
-        self.lambda_sig=self.lambda_sig/max_lambda
-        return
+    def normalise_lambdas(self, red_chi_squareds, params, output=True):
+        self.lambda_Tb=1./red_chi_squareds[0]
+        self.lambda_tau=1./red_chi_squareds[1]
+        v_cost_amount=np.sum((params[1::3,1] / params[1::3,0] - 1.)**2)
+        sig_cost_amount=np.sum((params[2::3,1] / params[2::3,0] - 1.)**2)
+        self.lambda_mu=1./v_cost_amount
+        self.lambda_sig=1./sig_cost_amount
+        if output:
+            return self.lambda_Tb, self.lambda_tau, self.lambda_mu, self.lambda_sig
+        else:
+            return
     
     def reset_lambdas(self):
         self.lambda_Tb=1.
@@ -233,7 +234,7 @@ class lbfgs_abs(object):
                 n_gauss_tau=int(n_gauss//2)
             params_Tb = self.init_spectrum(np.full((3*n_gauss_Tb),1.), n_gauss_Tb, self.Tb, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, iprint_init, amp_fact_init, sig_init, maxiter_init)
             params_tau = self.init_spectrum(np.full((int(3*n_gauss_tau)),1.), n_gauss_tau, self.tau, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, iprint_init, amp_fact_init, sig_init, maxiter_init)
-            return params_Tb, params_tau
+            return params_Tb, params_tau, n_gauss_Tb
 
     def order_params(self, params):
     #This function will order the parameters by their gaussian centres
