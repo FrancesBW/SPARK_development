@@ -131,7 +131,6 @@ class lbfgs_abs(object):
                 print('The lambdas at this stage are:')
                 print([self.lambda_Tb, self.lambda_tau,self.lambda_mu, self.lambda_sig])
                 prelim_result = self.self_correcting_optimisation(cube, rms, params, n_gauss_fitted, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, pcc_mu, pcc_sig, red_chi_sq_thres, iprint_init, amp_fact_init, sig_init, maxiter, maxiter_init, max_cor_iter, iprint, bounds)
-                print('The optimised J is: {}'.format(str(prelim_result[1])))
                 params=prelim_result     
                     
         #the prelim_result needs to be converted to physical quantities, as it is just pixel quantities at this point, we can also undo the normalisation at this point
