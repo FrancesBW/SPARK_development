@@ -34,7 +34,7 @@ class lbfgs_abs(object):
         if self.hdr is not None : self.v = self.mean2vel(self.hdr["CRVAL3"]*1.e-3, self.hdr["CDELT3"]*1.e-3, 
                                                          self.hdr["CRPIX3"], np.arange(len(self.tau)))
 
-    def run(self, n_gauss=18, lb_amp=0, ub_amp=100, lb_mu=1, ub_mu=500, lb_sig=1, ub_sig=100, pcc_mu=0.9, pcc_sig=0.9, red_chi_sq_thres=1.5, amp_fact_init=0.666, sig_init=2., maxiter=15000, maxiter_init=15000, max_cor_iter=10, iprint=1, iprint_init=1, init=0, prior=None):
+    def run(self, n_gauss=10, lb_amp=0, ub_amp=100, lb_mu=1, ub_mu=500, lb_sig=1, ub_sig=100, pcc_mu=0.9, pcc_sig=0.9, red_chi_sq_thres=1.5, amp_fact_init=0.666, sig_init=2., maxiter=15000, maxiter_init=15000, max_cor_iter=10, iprint=1, iprint_init=1, init=0, prior=None):
 
         #Flag test basic properties
         if len(self.Tb) != len(self.tau) : 
@@ -72,9 +72,8 @@ class lbfgs_abs(object):
                 params[3*n_gauss_Tb:,1] = params_tau
 
             #Update both with regularization
-            prelim_result = optimize.fmin_l_bfgs_b(self.f_g, params.ravel(), args=(n_gauss, cube, rms), bounds=bounds, 
-                                                   approx_grad=False, disp=iprint, maxiter=maxiter)
-            params=prelim_result[0]
+            prelim_result = self.self_correcting_optimisation(cube, rms, params, n_gauss, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, pcc_mu, pcc_sig, red_chi_sq_thres, iprint_init, amp_fact_init, sig_init, maxiter, maxiter_init, max_cor_iter, iprint, bounds)
+            params=prelim_result
 
         #now we write the case where we do an iterative solution we will set up it separately for if we need to start from one 
         #or from a predefined solution
@@ -105,8 +104,8 @@ class lbfgs_abs(object):
                 params[:,1] = params_Tb
                 bounds = self.init_bounds(cube, params, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig)
                 current_model=self.model(params, cube, n_gauss_fitted)
-                self.normalise_lambdas(self.reduced_chi_squared(cube, current_model, rms, n_gauss_fitted)*len(cube), params, 
-                                       pcc_mu=pcc_mu, pcc_sig=pcc_sig, output=False, pre=True)
+                #self.normalise_lambdas(self.reduced_chi_squared(cube, current_model, rms, n_gauss_fitted)*len(cube), params, 
+                                       #pcc_mu=pcc_mu, pcc_sig=pcc_sig, output=False, pre=True)
                 prelim_result = optimize.fmin_l_bfgs_b(self.f_g, params.ravel(), args=(n_gauss_fitted, cube, rms),
                                                        bounds=bounds, approx_grad=False, disp=iprint, maxiter=maxiter)
                 params=np.reshape(prelim_result[0], (3*n_gauss_fitted, cube.shape[1]))
@@ -126,30 +125,28 @@ class lbfgs_abs(object):
                 params=np.append(params,[[sig_init,sig_init]],axis=0)
                 n_gauss_fitted+=1
                 bounds = self.init_bounds(cube, params, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig)
-                #self.reset_lambdas()
-                self.normalise_lambdas(self.reduced_chi_squared(cube, current_model, rms, n_gauss_fitted)*len(cube), params, 
-                                       pcc_mu=pcc_mu, pcc_sig=pcc_sig, output=False, pre=True)
+                self.reset_lambdas()
+                #self.normalise_lambdas(self.reduced_chi_squared(cube, current_model, rms, n_gauss_fitted)*len(cube), params, 
+                                       #pcc_mu=pcc_mu, pcc_sig=pcc_sig, output=False, pre=True)
                 print('The lambdas at this stage are:')
                 print([self.lambda_Tb, self.lambda_tau,self.lambda_mu, self.lambda_sig])
-                prelim_result = optimize.fmin_l_bfgs_b(self.f_g, params.ravel(), args=(n_gauss_fitted, cube, rms),
-                                                       bounds=bounds, approx_grad=False, disp=iprint, maxiter=maxiter)
+                prelim_result = self.self_correcting_optimisation(cube, rms, params, n_gauss_fitted, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, pcc_mu, pcc_sig, red_chi_sq_thres, iprint_init, amp_fact_init, sig_init, maxiter, maxiter_init, max_cor_iter, iprint, bounds)
                 print('The optimised J is: {}'.format(str(prelim_result[1])))
-                params=np.reshape(prelim_result[0], (3*n_gauss_fitted, cube.shape[1]))       
+                params=prelim_result     
                     
         #the prelim_result needs to be converted to physical quantities, as it is just pixel quantities at this point, we can also undo the normalisation at this point
         result=copy.copy(params)
-        result[0::6]=result[0::6]/norm_factor
-        return result, prelim_result[1]
+        result[0::3,0]=result[0::3,0]/norm_factor
+        return result
 
     def self_correcting_optimisation(self, cube, rms, params, n_gauss, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, pcc_mu, pcc_sig, red_chi_sq_thres, iprint_init, amp_fact_init, sig_init, maxiter, maxiter_init, max_cor_iter, iprint, bounds):
         metric_limits=np.array([red_chi_sq_thres, red_chi_sq_thres, pcc_mu, pcc_sig])
         print('Optimising for {} gaussians'.format(str(n_gauss)))
         for i in np.arange(max_cor_iter):
-            print('**********************************************')
-            print('Parameters prior to optimisation lbfgs')
-            print(params)
             cal=self.f_g(params, n_gauss, cube, rms)
-            print('The J value of this guess is:. {}'.format(str(cal[0])))
+            #print('Parameters before the optimisation')
+            #print(params)
+            #print('The J value of this guess is:. {}'.format(str(cal[0])))
             result=optimize.fmin_l_bfgs_b(self.f_g, params.ravel(), args=(n_gauss, cube, rms), bounds=bounds,
                                           approx_grad=False, disp=iprint, maxiter=maxiter)    
             new_params = np.reshape(result[0], (3*n_gauss, cube.shape[1]))
@@ -158,19 +155,17 @@ class lbfgs_abs(object):
                 break
             else:
                 params=new_params
-            print('Parameters after the optimisation')
-            print(params)
-            print('J value {}'.format(str(result[1])))
-            print('**********************************************')
+            #print('Parameters after the optimisation')
+            #print(params)
+            #print('J value {}'.format(str(result[1])))
+            #print('**********************************************')
             model_cube=self.model(params, cube, n_gauss)
             fit_metrics=self.reduced_chi_squared(cube, model_cube, rms, n_gauss)
             corr_diffs=np.array([np.abs(params[1::3,0]-params[1::3,1]), np.abs(params[2::3,0]-params[2::3,1])])
             good_fit=True
-            print('Calculated values are:')
-            print(fit_metrics)
-            print(corr_diffs)
             
-            Tb_cor, tau_cor, v_cor, sig_cor = self.normalise_lambdas(fit_metrics*len(cube), params)
+            #Tb_cor, tau_cor, v_cor, sig_cor = self.normalise_lambdas(fit_metrics*len(cube), params)
+            Tb_cor, tau_cor, v_cor, sig_cor = [1.,1.,100.,100.]
             if fit_metrics[0]>metric_limits[0]: 
                 print('emission not fitted enough, current lambda_tb = {}'.format(str(self.lambda_Tb)))
                 print('This is iteration {}'.format(str(i)))
@@ -333,9 +328,9 @@ class lbfgs_abs(object):
         for i in np.arange(data.shape[1]):
             for v in np.arange(data.shape[0]):
                 if i ==0 :
-                    product[:,v,i] = self.lambda_Tb * dF_over_dB[:,v,i] * F[v,i]
+                    product[:,v,i] = self.lambda_Tb * dF_over_dB[:,v,i] * F[v,i]/rms[v,i]
                 else:
-                    product[:,v,i] = self.lambda_tau * dF_over_dB[:,v,i] * F[v,i]
+                    product[:,v,i] = self.lambda_tau * dF_over_dB[:,v,i] * F[v,i]/rms[v,i]
 
                         
         deriv = np.sum(product, axis=1)
