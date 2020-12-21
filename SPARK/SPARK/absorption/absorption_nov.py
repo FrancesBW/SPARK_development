@@ -236,7 +236,7 @@ class lbfgs_abs(object):
     
     def fresh_init(self, n_gauss, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, iprint_init, amp_fact_init, sig_init, maxiter_init):
         if n_gauss==1:
-            params_Tb = self.init_spectrum(np.full((3),1.), 1, self.Tb, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, iprint_init, amp_fact_init, sig_init, maxiter_init)
+            params_Tb = self.init_spectrum_Tb(self.shape_params(np.full((7),1.), 1), 1, self.Tb, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, iprint_init, amp_fact_init, sig_init, maxiter_init)
             return params_Tb, None
         else:
             if n_gauss%2==0:
@@ -245,8 +245,8 @@ class lbfgs_abs(object):
             else:
                 n_gauss_Tb=int(n_gauss//2+1)
                 n_gauss_tau=int(n_gauss//2)
-            params_Tb = self.init_spectrum(np.full((3*n_gauss_Tb),1.), n_gauss_Tb, self.Tb, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, iprint_init, amp_fact_init, sig_init, maxiter_init)
-            params_tau = self.init_spectrum(np.full((int(3*n_gauss_tau)),1.), n_gauss_tau, self.tau, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, iprint_init, amp_fact_init, sig_init, maxiter_init)
+            params_Tb = self.init_spectrum_Tb(self.shape_params(np.full((6*n_gauss_Tb+1),1.), n_gauss_Tb), n_gauss_Tb, self.Tb, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, iprint_init, amp_fact_init, sig_init, maxiter_init)
+            params_tau = self.init_spectrum_tau(self.shape_params(np.full((6*n_gauss_tau+1),1.), n_gauss_tau), n_gauss_tau, self.tau, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, iprint_init, amp_fact_init, sig_init, maxiter_init)
             return params_Tb, params_tau, n_gauss_Tb
 
     def order_params(self, params):
@@ -298,9 +298,7 @@ class lbfgs_abs(object):
             
         return [(bounds_inf.ravel()[i], bounds_sup.ravel()[i]) for i in np.arange(len(bounds_sup.ravel()))]
 
-
     def f_g(self, pars, n_gauss, data, rms):
-        params = np.reshape(pars, (3*n_gauss, data.shape[1]))
         
         x = np.arange(data.shape[0])
         
@@ -311,48 +309,51 @@ class lbfgs_abs(object):
 
         for i in np.arange(data.shape[1]):
             for k in np.arange(n_gauss):
-                model[:,i] += self.gaussian(x, params[0+(k*3),i], params[1+(k*3),i], params[2+(k*3),i])
+                if i==0:
+                    model[:,0] += params[0+(k*4)]*(np.ones(data.shape[0])-np.exp(-self.gaussian(x, params[1+(k*4)], params[2+(k*4)], params[3+(k*4)])))
+                elif i==1:
+                    model[:,i] += self.gaussian(x, params[1+(k*4),i], params[2+(k*4),i], params[3+(k*4),i])
                 
-                dF_over_dB[0+(k*3),:,i] += (1. 
-                                            * np.exp((-(x - params[1+(k*3),i])**2)/(2.* (params[2+(k*3),i])**2)))
-                dF_over_dB[1+(k*3),:,i] += (params[0+(k*3),i] * (x - params[1+(k*3),i]) / (params[2+(k*3),i])**2 
-                                            * np.exp((-(x - params[1+(k*3),i])**2)/(2.* (params[2+(k*3),i])**2)))
-                dF_over_dB[2+(k*3),:,i] += (params[0+(k*3),i] * (x - params[1+(k*3),i])**2 / (params[2+(k*3),i])**3 
-                                            * np.exp((-(x - params[1+(k*3),i])**2)/(2.* (params[2+(k*3),i])**2)))                
+                dF_over_dB[1+(k*4),:,i] += (1. 
+                                            * np.exp((-(x - params[2+(k*4)])**2)/(2.* (params[3+(k*4)])**2)))
+                dF_over_dB[2+(k*4),:,i] += (params[1+(k*4)] * (x - params[2+(k*4)]) / (params[3+(k*4)])**2 
+                                            * np.exp((-(x - params[2+(k*4)])**2)/(2.* (params[3+(k*4)])**2)))
+                dF_over_dB[3+(k*4),:,i] += (params[1+(k*4)] * (x - params[2+(k*4)])**2 / (params[3+(k*4)])**3 
+                                            * np.exp((-(x - params[2+(k*4)])**2)/(2.* (params[3+(k*4)])**2)))                
 
         F = model - data   
         
-        F /= rms
+        F[:,0] /= rms[0]
+        F[:,1] /= rms[1]
         
         for i in np.arange(data.shape[1]):
             for v in np.arange(data.shape[0]):
                 if i ==0 :
-                    product[:,v,i] = self.lambda_Tb * dF_over_dB[:,v,i] * F[v,i]/rms[v,i]
+                    product[:,v,i] = lambda_Tb * dF_over_dB[:,v,i] * F[v,i]
                 else:
-                    product[:,v,i] = self.lambda_tau * dF_over_dB[:,v,i] * F[v,i]/rms[v,i]
+                    product[:,v,i] = lambda_tau * dF_over_dB[:,v,i] * F[v,i]
 
                         
         deriv = np.sum(product, axis=1)
 
-        J =  0.5 * self.lambda_Tb * np.sum(F[:,0]**2) + 0.5 * self.lambda_tau * np.sum(F[:,1]**2)
+        J =  0.5 * lambda_Tb * np.sum(F[:,0]**2) + 0.5 * lambda_tau * np.sum(F[:,1]**2)
 
-        R_mu = 0.5 * self.lambda_mu * np.sum((params[1::3,1] / params[1::3,0] - 1.)**2)
-        R_sig = 0.5 * self.lambda_sig * np.sum((params[2::3,1] / params[2::3,0] - 1.)**2)
+        R_mu = 0.5 * lambda_mu * np.sum((params[1::3,1] / params[1::3,0] - 1.)**2)
+        R_sig = 0.5 * lambda_sig * np.sum((params[2::3,1] / params[2::3,0] - 1.)**2)
         
-        deriv[1::3,0] = deriv[1::3,0] - (self.lambda_mu * params[1::3,1] / params[1::3,0]**2.
+        deriv[1::3,0] = deriv[1::3,0] - (lambda_mu * params[1::3,1] / params[1::3,0]**2.
                                          * (params[1::3,1] / params[1::3,0] - 1.))
         
-        deriv[1::3,1] = deriv[1::3,1] + (self.lambda_mu / params[1::3,0]
+        deriv[1::3,1] = deriv[1::3,1] + (lambda_mu / params[1::3,0]
                                          * (params[1::3,1] / params[1::3,0] - 1.))
         
-        deriv[2::3,0] = deriv[2::3,0] - (self.lambda_sig *  params[2::3,1] / params[2::3,0]**2.
+        deriv[2::3,0] = deriv[2::3,0] - (lambda_sig *  params[2::3,1] / params[2::3,0]**2.
                                          * (params[2::3,1] / params[2::3,0] - 1.))
         
-        deriv[2::3,1] = deriv[2::3,1] + (self.lambda_sig / params[2::3,0]
+        deriv[2::3,1] = deriv[2::3,1] + (lambda_sig / params[2::3,0]
                                          * (params[2::3,1] / params[2::3,0] - 1.))
         
         return J + R_mu + R_sig, deriv.ravel()
-
     
     def f_g_spectrum(self, params, n_gauss, data):
         x = np.arange(data.shape[0])
@@ -382,23 +383,46 @@ class lbfgs_abs(object):
         J = 0.5*np.sum(F**2)
         
         return J, deriv.ravel()
-
-
-    def init_spectrum(self, params, n_gauss, data, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, 
+    
+    def init_spectrum_Tb(self, params, n_gauss, data, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, 
                       iprint, amp_fact_init, sig_init, maxiter):
-
 
         for i in np.arange(int(n_gauss)):
             n = i+1
             x = np.arange(data.shape[0])
             bounds = self.init_bounds_spectrum(n, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig)
-            model = np.zeros(data.shape[0])
-            
-            for k in np.arange(n):
-                model += self.gaussian(x, params[0+(k*3)], params[1+(k*3)], params[2+(k*3)])
+            model = self.model_Tb_spectrum(params, data, n_gauss)
 
             residual = model - data
             xx = np.zeros((3*n,1))
+            
+            xx[0,0] = params[0,0]
+            for i in np.arange(3*n):
+                xx[0,1][i] = params[0,1][i]
+                xx[1,1][i] = params[1,1][i]
+                
+            xx[1+(i*3)] = np.where(residual == np.nanmin(residual))[0][0]
+            xx[0+(i*3)] = data[int(xx[1+(i*3)])] * amp_fact_init
+            xx[2+(i*3)] = sig_init
+
+            result = optimize.fmin_l_bfgs_b(self.f_g_spectrum, self.flatten_params(xx), args=(n, data), 
+                                        bounds=bounds, approx_grad=False, disp=iprint, maxiter=maxiter)
+    
+            for p in np.arange(3*n):
+                params[0,1][p] = result[0][p]
+            
+        return params
+    
+    def init_spectrum_tau(self, params, n_gauss, data, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig, 
+                      iprint, amp_fact_init, sig_init, maxiter):
+        for i in np.arange(int(n_gauss)):
+            n = i+1
+            x = np.arange(data.shape[0])
+            bounds = self.init_bounds_spectrum(n, lb_amp, ub_amp, lb_mu, ub_mu, lb_sig, ub_sig)
+            model = self.model_tau_spectrum(params, data, n_gauss)
+
+            residual = model - data
+            xx = self.shape_params(np.zeros(6*n+1), n)
             
             for p in np.arange(3*n):
                 xx[p] = params[p]
@@ -413,32 +437,55 @@ class lbfgs_abs(object):
             for p in np.arange(3*n):
                 params[p] = result[0][p]
             
-        return params
+        return np.array([params[0],params[1::]])
 
 
     def gaussian(self, x, amp, mu, sig):
         return amp * np.exp(-((x - mu)**2)/(2. * sig**2))
 
-
-    def model_spectrum(self, params, data, n_gauss):
+    def model_tau_spectrum(self, params, data, n_gauss):
         x = np.arange(data.shape[0])
-        model = np.zeros(len(x))        
+        model = np.zeros(len(x))
+        params_tau=params[1,1]
         
         for k in np.arange(n_gauss):
-            model += self.gaussian(x, params[0+(k*3)], params[1+(k*3)], params[2+(k*3)])
-
-        return model
-
-
-    def model(self, params, data, n_gauss):
-        x = np.arange(data.shape[0])
-        model = np.zeros(data.shape)
-        
-        for i in np.arange(data.shape[1]):
-            for k in np.arange(n_gauss):
-                model[:,i] += self.gaussian(x, params[0+(k*3),i], params[1+(k*3),i], params[2+(k*3),i])
+            model += self.gaussian(x, params_tau[0+(k*3)], params_tau[1+(k*3)], params_tau[2+(k*3)])
             
         return model
+    
+    def model_Tb_spectrum(self, params, data, n_gauss):
+        x = np.arange(data.shape[0])
+        exponent = np.zeros(len(x))
+        B=params[0,0]
+        params_Tb=params[0,1]
+        
+        for k in np.arange(n_gauss):
+            exponent += self.gaussian(x, params_Tb[0+(k*3)], params_Tb[1+(k*3)], params_Tb[2+(k*3)])
+            
+        model=B*(np.ones(len(x))-np.exp(-exponent))
+        return model
+
+    def model_array(self, params, data, n_gauss):
+        model = np.zeros(data.shape)
+        model[:,0] = self.model_Tb_spectrum(params, data, n_gauss)
+        model[:,1] = self.model_tau_spectrum(params, data, n_gauss)
+        return model
+    
+    def shape_params(self, params, n_gauss):
+        B=params[0]
+        params_Tb=params[1:3*n_gauss+1]
+        params_tau=params[3*n_gauss+1:]
+        params_shaped=np.array([np.array([B,params_Tb]),np.array([0.,params_tau])])
+        return params_shaped
+
+    def flatten_params(self, params_shaped):
+        n_gauss=int(len(params_shaped[0,1])/3)
+        params=np.zeros(6*n_gauss+1)
+        params[0]=params_shaped[0,0]
+        params[1:3*n_gauss+1]=params_shaped[0,1]
+        params[3*n_gauss+1:]=params_shaped[1,1]
+        return params
+
 
     def plot_model(self, cube, model_cube, rms):
         v=np.arange(len(cube))
